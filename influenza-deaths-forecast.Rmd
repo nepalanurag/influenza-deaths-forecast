@@ -1,0 +1,293 @@
+---
+title: "443_Project"
+author: "ANURAG NEPAL"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r}
+# Load necessary libraries
+library(forecast)
+library(tseries)
+library(dplyr)
+library(lubridate)
+library(knitr)
+library(ggplot2)
+library(astsa)
+library(itsmr)
+library(ltsa)
+library(car)
+```
+```{r}
+# ========================================================
+# DATA LOADING & CLEANING
+# ========================================================
+# Load Data
+raw_data <- read.csv("/Users/anurag/Downloads/National_Custom_Data.csv", stringsAsFactors = FALSE)
+head(raw_data)
+# Clean Numerical Columns (Remove commas)
+clean_col <- function(x) as.numeric(gsub(",", "", x))
+raw_data$NUM.INFLUENZA.DEATHS <- clean_col(raw_data$NUM.INFLUENZA.DEATHS)
+raw_data$NUM.PNEUMONIA.DEATHS <- clean_col(raw_data$NUM.PNEUMONIA.DEATHS)
+raw_data$TOTAL.DEATHS <- clean_col(raw_data$TOTAL.DEATHS)
+
+# Create Date Column
+get_cal_year <- function(season, week) {
+  start_year <- as.numeric(substr(season, 1, 4))
+  if (week >= 40) return(start_year)
+  else return(start_year + 1)
+}
+raw_data$Year <- mapply(get_cal_year, raw_data$SEASON, raw_data$WEEK)
+raw_data$Date <- as.Date(paste(raw_data$Year, raw_data$WEEK, 1, sep="-"), format="%Y-%U-%u")
+
+# Aggregate to Monthly Level
+monthly_data <- raw_data %>%
+  group_by(MonthDate = floor_date(Date, "month")) %>%
+  summarise(
+    Total_P_I = sum(NUM.INFLUENZA.DEATHS + NUM.PNEUMONIA.DEATHS, na.rm = TRUE),
+    Total_All_Deaths = sum(TOTAL.DEATHS, na.rm = TRUE)
+  ) %>%
+  mutate(Percent_PI = (Total_P_I / Total_All_Deaths) * 100) %>%
+  arrange(MonthDate) %>%
+  filter(!is.na(MonthDate))
+
+# Create Time Series Objects
+start_yr <- year(min(monthly_data$MonthDate))
+start_mo <- month(min(monthly_data$MonthDate))
+
+# 1. Raw Data
+ts_raw <- ts(monthly_data$Percent_PI, start = c(start_yr, start_mo), frequency = 12)
+
+# 2. Cleaned Data (Outliers Interpolated for Robust Modeling)
+ts_cleaned <- tsclean(ts_raw)
+```
+```{r}
+summary(monthly_data$Percent_PI)
+summary(ts_cleaned)
+```
+
+```{r}
+# Plot Raw Data
+plot(ts_raw, main="US P&I Mortality Rate (Raw Data)", ylab="% Deaths", col="darkblue", lwd=1.5)
+grid()
+plot(ts_cleaned, main="US P&I Mortality Rate (Cleaned Data)", ylab="% Deaths", col="darkblue", lwd=1.5)
+grid()
+
+# STL Decomposition (Using Cleaned Data to see clear seasonality)
+decomp <- stl(ts_cleaned, s.window="periodic")
+plot(decomp, main="STL Decomposition (Cleaned Data)")
+
+# ACF and PACF
+par(mfrow=c(1,2))
+Acf(ts_cleaned, main="ACF (Cleaned Data)")
+Pacf(ts_cleaned, main="PACF (Cleaned Data)")
+par(mfrow=c(1,1))
+```
+```{r}
+# We use ETS (Error, Trend, Seasonality).
+# model="ZZZ" allows the function to automatically select the best error/trend/season type
+
+# Fit ETS Model
+fit_ets <- forecast::ets(ts_cleaned, model="ZZZ") 
+
+# Summary of chosen model
+print(summary(fit_ets))
+
+# Plot ETS Forecast
+ets_fc <- forecast::forecast(fit_ets, h=24)
+
+plot(ets_fc)
+test(ets_fc$residuals)
+```
+
+```{r}
+# 1. Test on Level Data
+print("--- ADF Test: Level ---")
+print(aTSA::adf.test(ts_cleaned)) 
+
+# 2. Test on Seasonal Difference (D=1)
+ts_diff <- diff(ts_cleaned, lag=12)
+print("--- ADF Test: Seasonal Difference (D=1) ---")
+print(aTSA::adf.test(ts_diff))
+
+# 3. Test on Double Difference (D=1, d=1)
+# Often required if seasonal differencing alone doesn't remove the trend
+ts_doubly_diff <- diff(ts_diff, lag=1)
+print("--- ADF Test: Seasonal + First Difference (D=1, d=1) ---")
+print(aTSA::adf.test(ts_doubly_diff))
+```
+
+```{r}
+# Model 1: ARIMA on Raw Data
+fit_raw <- auto.arima(ts_raw, seasonal=TRUE, stepwise=FALSE, approximation=FALSE,trace =TRUE )
+
+# Model 2: ARIMA on Cleaned Data (No Transformation)
+fit_clean <- auto.arima(ts_cleaned, seasonal=TRUE, stepwise=FALSE, approximation=FALSE,trace =TRUE )
+
+# Model 3: ARIMA on Cleaned Data + Log Transformation
+fit_log_clean <- auto.arima(ts_cleaned, seasonal=TRUE, lambda=0,  approximation=FALSE,trace =TRUE )
+```
+```{r}
+# Function to extract metrics
+get_accuracy <- function(model, name) {
+  acc <- accuracy(model)
+  return(data.frame(
+    Model = name,
+    AICc = round(model$aicc, 2),
+    RMSE = round(acc[2], 4),
+    MAPE = round(acc[5], 4)
+  ))
+}
+
+# Combine into a table
+comparison_table <- rbind(
+  get_accuracy(fit_raw, "ARIMA (Raw Data)"),
+  get_accuracy(fit_clean, "ARIMA (Cleaned Data)"),
+  get_accuracy(fit_log_clean, "ARIMA (Cleaned + Log)")
+)
+
+kable(comparison_table, caption = "Model Accuracy Comparison")
+```
+```{r}
+test(fit_raw$residuals)
+test(fit_clean$residuals)
+
+test(fit_log_clean$residuals)
+
+```
+```{r}
+# Generate Forecasts
+fc_raw <- forecast::forecast(fit_raw, h=24)
+fc_clean <- forecast::forecast(fit_clean, h=24)
+fc_log_clean  <- forecast::forecast(fit_log_clean, h=24, biasadj=TRUE)
+
+plot(fc_raw, main="Forecast: Raw Model (No Log Transform)", ylab="% Deaths", fcol="blue")
+lines(ts_raw, col="black")
+# PLOT 1: Cleaned Data Model
+plot(fc_clean, main="Forecast: Cleaned Model (No Log Transform)", ylab="% Deaths", fcol="blue")
+lines(ts_raw, col="black")
+
+
+plot(fc_log_clean, 
+     main="24-Month Forecast: US P&I Mortality (Log-Transformed+ Cleaned)", 
+     ylab="% Deaths", 
+     xlab="Year",
+     fcol="#b00000",       # Dark Red
+     flty=1, lwd=2,
+     shadecols=c("#d9d9d9", "#bdbdbd")
+     )        # Focus on realistic range
+
+# Overlay Historical Data
+lines(ts_raw, col="black", lwd=1.5)
+
+legend("topleft", 
+       legend=c("Historical (Raw)", "Forecast (Log-ARIMA)", "95% CI"),
+       col=c("black", "#b00000", "#bdbdbd"), 
+       lty=c(1, 1, 1), lwd=c(1.5, 2, 8), bty="n")
+```
+
+```{r}
+# Extract forecast values into a readable dataframe
+fc_values <- data.frame(
+  Date = seq(from = max(monthly_data$MonthDate) %m+% months(1), by = "month", length.out = 24),
+  Forecast = round(fc_log_clean$mean, 2),
+  Lower_95 = round(fc_log_clean$lower[,"95%"], 2),
+  Upper_95 = round(fc_log_clean$upper[,"95%"], 2)
+)
+
+kable(fc_values, caption = "24-Month Forecast Values (Log-ARIMA)")
+```
+
+
+```{r}
+library(rugarch)
+# 1. Extract Residuals from the best ARIMA fit
+best_residuals <- residuals(fit_raw) # Using Raw ARIMA residuals to capture the real spikes
+
+# 2. Define GARCH(1,1) Specification
+garch_spec <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(0, 0), include.mean = FALSE),
+  distribution.model = "std" 
+)
+
+# 3. Fit GARCH
+garch_fit <- ugarchfit(spec = garch_spec, data = best_residuals)
+
+# 4. Diagnostics
+print(garch_fit) 
+
+# Plot Conditional Volatility (Sigma)
+volatility <- sigma(garch_fit)
+plot(volatility, type="l", col="darkred", 
+     main="Conditional Volatility (Sigma) - GARCH(1,1)",
+     ylab="Estimated Volatility", xlab="Time")
+grid()
+```
+```{r}
+# Extract Standardized Residuals
+std_resid <- residuals(garch_fit, standardize=TRUE)
+
+# Diagnostic Tests (Ljung-Box, etc.)
+test(as.numeric(std_resid))
+```
+
+
+```{r}
+# 8. Final Hybrid Forecasting
+
+forecast_horizon <- 24
+
+# 1. ARIMA Forecast (Mean)
+fc_arima <- forecast::forecast(fit_raw, h=forecast_horizon)
+
+# 2. GARCH Forecast (Variance/Sigma)
+garch_fc <- ugarchforecast(garch_fit, n.ahead = forecast_horizon)
+sigma_forecast <- sigma(garch_fc)
+
+# 3. Create Hybrid Dataframe
+start_date <- max(monthly_data$MonthDate)
+future_dates <- seq(from = start_date, by = "month", length.out = forecast_horizon + 1)[-1]
+
+hybrid_df <- data.frame(
+  Date = future_dates,
+  Mean_Forecast = as.numeric(fc_arima$mean),
+  Sigma_GARCH = as.numeric(sigma_forecast)
+)
+
+# Calculate 95% Confidence Intervals
+hybrid_df$Lower_95 <- hybrid_df$Mean_Forecast - (1.96 * hybrid_df$Sigma_GARCH)
+hybrid_df$Upper_95 <- hybrid_df$Mean_Forecast + (1.96 * hybrid_df$Sigma_GARCH)
+
+# 4. Final Plot
+
+library(lubridate)
+forecast_time_axis <- decimal_date(hybrid_df$Date)
+
+# 2. Define Plot Limits
+start_plot <- 2018
+end_plot   <- max(time(ts_raw)) + (24/12) 
+
+# 3. Plot
+plot(ts_raw, 
+     main="24-Month Forecast: Hybrid ARIMA + GARCH(1,1)", 
+     ylab="% Deaths", xlab="Year",
+     xlim=c(start_plot, end_plot), 
+     ylim=c(min(hybrid_df$Lower_95), max(ts_raw)),
+     col="black", lwd=1)
+
+# 4. Add Lines using the converted time axis
+lines(forecast_time_axis, hybrid_df$Mean_Forecast, col="blue", lwd=2)
+lines(forecast_time_axis, hybrid_df$Upper_95, col="red", lty=2)
+lines(forecast_time_axis, hybrid_df$Lower_95, col="red", lty=2)
+
+legend("topleft", 
+       legend=c("Historical", "Forecast Mean", "GARCH 95% CI"),
+       col=c("black", "blue", "red"), 
+       lty=c(1, 1, 2), lwd=c(1, 2, 1), bty="n")
+
+```
+
+
+
+
