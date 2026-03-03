@@ -1,5 +1,5 @@
 ---
-title: "443_Project"
+title: "Influenza Deaths Forecast"
 author: "ANURAG NEPAL"
 date: "`r Sys.Date()`"
 output: pdf_document
@@ -23,7 +23,10 @@ library(car)
 # DATA LOADING & CLEANING
 # ========================================================
 # Load Data
-raw_data <- read.csv("/Users/anurag/Downloads/National_Custom_Data.csv", stringsAsFactors = FALSE)
+# National_Custom_Data.csv holds weekly influenza/pneumonia death counts from
+# national surveillance data. It is not in this repo; place it next to this
+# file to re-run the analysis.
+raw_data <- read.csv("National_Custom_Data.csv", stringsAsFactors = FALSE)
 head(raw_data)
 # Clean Numerical Columns (Remove commas)
 clean_col <- function(x) as.numeric(gsub(",", "", x))
