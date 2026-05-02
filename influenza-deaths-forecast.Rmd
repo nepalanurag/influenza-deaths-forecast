@@ -1,9 +1,21 @@
 ---
 title: "Influenza Deaths Forecast"
-author: "ANURAG NEPAL"
+author: "Anurag Nepal"
 date: "`r Sys.Date()`"
 output: pdf_document
 ---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Background
+
+I wanted to forecast US pneumonia and influenza mortality as a time series problem. Weekly surveillance death counts have strong seasonality and ugly reporting artifacts, including the COVID-era spikes. The question was which modeling approach gives a usable 24-month forecast: ETS, ARIMA on raw versus cleaned data, and finally a hybrid that lets volatility vary over time.
+
+# Setup
+
+The analysis reads `National_Custom_Data.csv`, which is not in this repo. It is a custom data download from CDC FluView's pneumonia, influenza, and COVID-19 mortality surveillance (NCHS), National region. To reproduce: open the FluView mortality surveillance page, use the Downloads tool, and export the custom National-level dataset. The columns used here are `SEASON`, `WEEK`, `NUM.INFLUENZA.DEATHS`, `NUM.PNEUMONIA.DEATHS`, and `TOTAL.DEATHS`.
 
 ```{r}
 # Load necessary libraries
@@ -18,14 +30,21 @@ library(itsmr)
 library(ltsa)
 library(car)
 ```
+
+# Method
+
+## Loading and cleaning
+
+The raw counts arrive comma-formatted, so the first job is parsing them into numbers. Flu seasons run week 40 to week 39, so I map each season/week pair to a calendar date, then aggregate to monthly level. The target is the percent of all deaths attributable to pneumonia and influenza. I keep two versions of the series: the raw one, and a cleaned one with outliers interpolated via `tsclean` for more robust modeling.
+
 ```{r}
 # ========================================================
 # DATA LOADING & CLEANING
 # ========================================================
 # Load Data
 # National_Custom_Data.csv holds weekly influenza/pneumonia death counts from
-# national surveillance data. It is not in this repo; place it next to this
-# file to re-run the analysis.
+# CDC FluView (NCHS mortality surveillance), National region custom download.
+# It is not in this repo; place it next to this file to re-run the analysis.
 raw_data <- read.csv("National_Custom_Data.csv", stringsAsFactors = FALSE)
 head(raw_data)
 # Clean Numerical Columns (Remove commas)
@@ -64,10 +83,15 @@ ts_raw <- ts(monthly_data$Percent_PI, start = c(start_yr, start_mo), frequency =
 # 2. Cleaned Data (Outliers Interpolated for Robust Modeling)
 ts_cleaned <- tsclean(ts_raw)
 ```
+
 ```{r}
 summary(monthly_data$Percent_PI)
 summary(ts_cleaned)
 ```
+
+## Exploring the series
+
+The raw plot shows the seasonal winter peaks plus the COVID-era spikes. After cleaning, the STL decomposition shows the seasonality clearly, and the ACF/PACF guide the ARIMA orders.
 
 ```{r}
 # Plot Raw Data
@@ -86,6 +110,11 @@ Acf(ts_cleaned, main="ACF (Cleaned Data)")
 Pacf(ts_cleaned, main="PACF (Cleaned Data)")
 par(mfrow=c(1,1))
 ```
+
+## ETS baseline
+
+First model: ETS with automatic error/trend/seasonality selection, fit on the cleaned series, with a 24-month forecast and residual diagnostics.
+
 ```{r}
 # We use ETS (Error, Trend, Seasonality).
 # model="ZZZ" allows the function to automatically select the best error/trend/season type
@@ -102,6 +131,10 @@ ets_fc <- forecast::forecast(fit_ets, h=24)
 plot(ets_fc)
 test(ets_fc$residuals)
 ```
+
+## Checking stationarity
+
+Before ARIMA, I ran ADF tests on the level, the seasonally differenced series, and the doubly differenced series to see how much differencing the data needs.
 
 ```{r}
 # 1. Test on Level Data
@@ -120,16 +153,21 @@ print("--- ADF Test: Seasonal + First Difference (D=1, d=1) ---")
 print(aTSA::adf.test(ts_doubly_diff))
 ```
 
-```{r}
+## ARIMA bake-off
+
+Three candidates, all fit with `auto.arima`: one on the raw data, one on the cleaned data, and one on the cleaned data with a log transform. The trace output is hidden to keep the document readable.
+
+```{r arima_fits, results='hide'}
 # Model 1: ARIMA on Raw Data
-fit_raw <- auto.arima(ts_raw, seasonal=TRUE, stepwise=FALSE, approximation=FALSE,trace =TRUE )
+fit_raw <- auto.arima(ts_raw, seasonal=TRUE, stepwise=FALSE, approximation=FALSE, trace=TRUE)
 
 # Model 2: ARIMA on Cleaned Data (No Transformation)
-fit_clean <- auto.arima(ts_cleaned, seasonal=TRUE, stepwise=FALSE, approximation=FALSE,trace =TRUE )
+fit_clean <- auto.arima(ts_cleaned, seasonal=TRUE, stepwise=FALSE, approximation=FALSE, trace=TRUE)
 
 # Model 3: ARIMA on Cleaned Data + Log Transformation
-fit_log_clean <- auto.arima(ts_cleaned, seasonal=TRUE, lambda=0,  approximation=FALSE,trace =TRUE )
+fit_log_clean <- auto.arima(ts_cleaned, seasonal=TRUE, lambda=0, approximation=FALSE, trace=TRUE)
 ```
+
 ```{r}
 # Function to extract metrics
 get_accuracy <- function(model, name) {
@@ -151,6 +189,9 @@ comparison_table <- rbind(
 
 kable(comparison_table, caption = "Model Accuracy Comparison")
 ```
+
+Residual diagnostics for all three fits:
+
 ```{r}
 test(fit_raw$residuals)
 test(fit_clean$residuals)
@@ -158,6 +199,9 @@ test(fit_clean$residuals)
 test(fit_log_clean$residuals)
 
 ```
+
+The log-transformed model on the cleaned series became the final forecasting model. Below are all three forecasts for comparison, then the chosen 24-month forecast with its values tabulated.
+
 ```{r}
 # Generate Forecasts
 fc_raw <- forecast::forecast(fit_raw, h=24)
@@ -201,6 +245,9 @@ fc_values <- data.frame(
 kable(fc_values, caption = "24-Month Forecast Values (Log-ARIMA)")
 ```
 
+## Hybrid ARIMA plus GARCH
+
+The ARIMA mean forecast assumes constant variance, but mortality spikes cluster. So I fit a GARCH(1,1) with Student-t errors on the raw ARIMA residuals, deliberately using the raw fit's residuals to keep the real spikes in the volatility estimate. The conditional volatility plot shows when uncertainty was highest.
 
 ```{r}
 library(rugarch)
@@ -227,6 +274,7 @@ plot(volatility, type="l", col="darkred",
      ylab="Estimated Volatility", xlab="Time")
 grid()
 ```
+
 ```{r}
 # Extract Standardized Residuals
 std_resid <- residuals(garch_fit, standardize=TRUE)
@@ -235,6 +283,9 @@ std_resid <- residuals(garch_fit, standardize=TRUE)
 test(as.numeric(std_resid))
 ```
 
+# Results
+
+The final hybrid forecast combines the ARIMA mean path with GARCH-driven 95% intervals: the interval width at each horizon comes from the forecasted conditional volatility rather than a constant variance assumption.
 
 ```{r}
 # 8. Final Hybrid Forecasting
@@ -291,6 +342,6 @@ legend("topleft",
 
 ```
 
+# Takeaway
 
-
-
+The cleaning step was the difference between a model that behaves and one that does not: comma-formatted counts and reporting artifacts had to be handled before any ARIMA would fit sensibly. On the cleaned series, the log-transformed ARIMA gave the final 24-month mean forecast, and layering GARCH(1,1) volatility on the residuals produced honest 95% intervals that widen where history was volatile. The hybrid keeps the seasonal structure from ARIMA while admitting that uncertainty itself clusters in time.
