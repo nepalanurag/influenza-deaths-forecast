@@ -1,0 +1,5 @@
+model,aicc,rmse,mape
+ARIMA (Raw Data),363.24,1.4169,9.9286
+ARIMA (Cleaned Data),291.47,1.0927,9.7174
+ARIMA (Raw + Log),-72.83,1.3309,9.0446
+ARIMA (Cleaned + Log),-96.64,1.0127,8.3257
