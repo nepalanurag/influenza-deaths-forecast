@@ -2,11 +2,19 @@
 title: "Influenza Deaths Forecast"
 author: "Anurag Nepal"
 date: "`r Sys.Date()`"
-output: pdf_document
+output:
+  html_document:
+    toc: true
+    css: blog.css
+    includes:
+      before_body: nav.html
+      after_body: footer.html
 ---
 
+<p class="sub">This is the web version of the analysis. The original PDF report is <a href="influenza-deaths-forecast.pdf">here</a>.</p>
+
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center")
 ```
 
 # Background
