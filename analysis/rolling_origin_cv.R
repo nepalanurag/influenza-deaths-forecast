@@ -88,9 +88,10 @@ for (i in seq_along(origins)) {
   # ARIMA on the raw window
   fc$arima_raw <- tryCatch(as.numeric(forecast(auto.arima(ytr), h = hh)$mean),
                            error = function(e) { fit_ok <<- FALSE; rep(NA_real_, hh) })
-  # ARIMA on the log of the window-cleaned series, bias-adjusted back-transform
+  # ARIMA on the log of the window-cleaned series (lambda = 0, as in the Rmd);
+  # forecast() back-transforms with bias adjustment to the original scale
   fc$arima_log_cleaned <- tryCatch(
-    as.numeric(forecast(auto.arima(log(yc)), h = hh, biasadj = TRUE)$mean),
+    as.numeric(forecast(auto.arima(yc, lambda = 0), h = hh, biasadj = TRUE)$mean),
     error = function(e) { fit_ok <<- FALSE; rep(NA_real_, hh) })
   # Seasonal naive benchmark
   fc$snaive <- as.numeric(snaive(ytr, h = hh)$mean)
@@ -114,9 +115,12 @@ out_dir <- file.path(repo_root, "analysis")
 dir.create(out_dir, showWarnings = FALSE)
 write.csv(res, file.path(out_dir, "rolling_origin_results.csv"), row.names = FALSE)
 
-cat("\nOut-of-sample RMSE by horizon (best per horizon marked *):\n")
+cat("\nOut-of-sample RMSE by horizon (* = best per horizon):\n")
 wide <- tapply(res$rmse, list(res$horizon, res$model), identity)
-print(round(wide, 3))
+best <- apply(wide, 1, function(r) names(which.min(r)))
+disp <- matrix(sprintf("%.3f", wide), nrow = nrow(wide), dimnames = dimnames(wide))
+for (h in rownames(disp)) disp[h, best[[h]]] <- paste0(disp[h, best[[h]]], "*")
+print(disp, quote = FALSE)
 cat("\nMean RMSE over horizons 1-12:\n")
 print(round(tapply(res$rmse, res$model, mean, na.rm = TRUE), 3))
 cat("\nwrote analysis/rolling_origin_results.csv\n")
