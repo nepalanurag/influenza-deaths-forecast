@@ -1455,6 +1455,18 @@ intervals that widen where history was volatile. The hybrid keeps the
 seasonal structure from ARIMA while admitting that uncertainty itself
 clusters in time.</p>
 </div>
+<div id="followup" class="section level1">
+<h1>Out-of-sample validation</h1>
+<p>The model comparison above is in-sample. This follow-up adds an expanding-window rolling-origin evaluation (<code>analysis/rolling_origin_cv.R</code>): 1&ndash;12 step-ahead errors for ETS, ARIMA, log-ARIMA, and a seasonal-naive benchmark, with <code>tsclean</code> re-applied inside each training window so no information leaks forward. It is the natural extension of the bake-off, and the original comparison is untouched.</p>
+<h2>The production forecast pipeline</h2>
+<p>The narrative, code, and dashboard artifacts previously described slightly different pipelines. They are now reconciled to one documented choice (<code>analysis/production_forecast.R</code>, described in the repo README as the production forecast pipeline):</p>
+<ol>
+<li>Log-ARIMA mean on the cleaned series (the <code>lambda = 0</code> spec).</li>
+<li>GARCH(1,1) with Student-t errors fit on the log-ARIMA residuals.</li>
+<li>Intervals from Student-t quantiles (not 1.96) times the forecasted conditional volatility, back-transformed, lower bound floored at 0.</li>
+</ol>
+<p>This regenerates <code>dashboard-data/forecast_24mo.csv</code> from a single script. The CDC source is now fetched by <code>data/fetch_fluview.R</code>, which writes a checksummed <code>data/fluview_snapshot.csv</code> (the documented CDC endpoints currently return access errors, so the script falls back to a schema-validated manually placed file with a clear message).</p>
+</div>
 
 <footer class="footer">Anurag Nepal · <a href="https://anurag-nepal-portfolio.vercel.app/">Portfolio</a> · <a href="https://github.com/nepalanurag/influenza-deaths-forecast">GitHub repo</a></footer>
 </div>
